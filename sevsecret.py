@@ -49,7 +49,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if (args.ovmf_file):
-        fh = open (args.ovmf_file, 'rb')
+        fh = open(args.ovmf_file, 'rb')
         h = hashlib.sha256(fh.read())
         ovmf_hash = h.digest()
     elif (args.ovmf_hash):
@@ -65,36 +65,38 @@ if __name__ == "__main__":
     else:
         parse.error('--socket must be <host>:<port> or /path/to/unix')
 
-    fh=open(args.tiktek_file, 'rb')
-    tiktek=bytearray(fh.read())
+    fh = open(args.tiktek_file, 'rb')
+    tiktek = bytearray(fh.read())
     fh.close()
 
     ##
     #  tiktek file is just two binary aes128 keys
     ##
-    TEK=tiktek[0:16]
-    TIK=tiktek[16:32]
+    TEK = tiktek[0:16]
+    TIK = tiktek[16:32]
 
     disk_secret = args.passwd
 
-    Qmp = qmp.QEMUMonitorProtocol(address=socket);
+    Qmp = qmp.QEMUMonitorProtocol(address=socket)
     Qmp.connect()
     caps = Qmp.command('query-sev')
-    print('SEV query found API={api-major}.{api-minor} build={build-id} policy={policy}'.format(**caps))
-    h = hmac.new(TIK, digestmod='sha256');
+    print(
+        'SEV query found API={api-major}.{api-minor} build={build-id} policy={policy}'.format(**caps))
+    h = hmac.new(TIK, digestmod='sha256')
 
     ##
     # calculated per section 6.5.2
     ##
     h.update(bytes([0x04]))
-    h.update(caps['api-major'].to_bytes(1,byteorder='little'))
-    h.update(caps['api-minor'].to_bytes(1,byteorder='little'))
-    h.update(caps['build-id'].to_bytes(1,byteorder='little'))
-    h.update(caps['policy'].to_bytes(4,byteorder='little'))
+    h.update(caps['api-major'].to_bytes(1, byteorder='little'))
+    h.update(caps['api-minor'].to_bytes(1, byteorder='little'))
+    h.update(caps['build-id'].to_bytes(1, byteorder='little'))
+    h.update(caps['policy'].to_bytes(4, byteorder='little'))
     h.update(ovmf_hash)
 
     print('\nGetting Launch Measurement')
     meas = Qmp.command('query-sev-launch-measure')
+    # launch measurement is diff for each TIK.
     launch_measure = base64.b64decode(meas['data'])
 
     ##
@@ -135,19 +137,21 @@ if __name__ == "__main__":
     l = 16 + 4 + 16 + 4 + len(disk_secret) + 1
     # SEV-ES requires rounding to 16
     l = (l + 15) & ~15
-    secret = bytearray(l);
+    secret = bytearray(l)
     secret[0:16] = UUID('{1e74f542-71dd-4d66-963e-ef4287ff173b}').bytes_le
     secret[16:20] = len(secret).to_bytes(4, byteorder='little')
     secret[20:36] = UUID('{736869e5-84f0-4973-92ec-06879ce3da0b}').bytes_le
-    secret[36:40] = (16 + 4 + len(disk_secret) + 1).to_bytes(4, byteorder='little')
+    secret[36:40] = (16 + 4 + len(disk_secret) +
+                     1).to_bytes(4, byteorder='little')
     secret[40:40+len(disk_secret)] = disk_secret.encode()
 
     ##
     # encrypt the secret table with the TEK in ctr mode using a random IV
     ##
-    IV=os.urandom(16)
+    IV = os.urandom(16)
     # -EKNUCKLEHEADS in python crypto don't understand CTR mode
-    e = AES.new(bytes(TEK), AES.MODE_CTR, counter=Counter.new(128,initial_value=int.from_bytes(IV, byteorder='big')));
+    e = AES.new(bytes(TEK), AES.MODE_CTR, counter=Counter.new(
+        128, initial_value=int.from_bytes(IV, byteorder='big')))
     encrypted_secret = e.encrypt(bytes(secret))
 
     ##
@@ -159,10 +163,10 @@ if __name__ == "__main__":
     ##
     # Table 55. LAUNCH_SECRET Packet Header Buffer
     ##
-    header=bytearray(52);
-    header[0:4]=FLAGS.to_bytes(4,byteorder='little')
-    header[4:20]=IV
-    h = hmac.new(TIK, digestmod='sha256');
+    header = bytearray(52)
+    header[0:4] = FLAGS.to_bytes(4, byteorder='little')
+    header[4:20] = IV
+    h = hmac.new(TIK, digestmod='sha256')
     h.update(bytes([0x01]))
     # FLAGS || IV
     h.update(header[0:20])
@@ -170,14 +174,13 @@ if __name__ == "__main__":
     h.update(l.to_bytes(4, byteorder='little'))
     h.update(encrypted_secret)
     h.update(measure)
-    header[20:52]=h.digest()
+    header[20:52] = h.digest()
 
     Qmp.command('sev-inject-launch-secret',
                 **{'packet-header': base64.b64encode(header).decode(),
                    'secret': base64.b64encode(encrypted_secret).decode()
-                })
+                   })
 
     print('\nSecret Injection Successful, starting VM')
 
     Qmp.command('cont')
-
